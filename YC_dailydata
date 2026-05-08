@@ -1,0 +1,56 @@
+import pandas as pd
+from datetime import datetime
+import os
+
+# ====================== 自动路径配置（不用改任何D盘地址） ======================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # 脚本所在文件夹
+INPUT_FILE = os.path.join(BASE_DIR, "分天分车型.xlsx")
+MAP_FILE = os.path.join(BASE_DIR, "reflect.xlsx")
+
+# ====================== 读取映射表 ======================
+reflect = pd.read_excel(MAP_FILE)
+reflect.columns = ["old", "new"]
+
+# ====================== 读取所有Sheet + 加上日期 ======================
+all_sheets = pd.ExcelFile(INPUT_FILE).sheet_names
+df_list = []
+
+for sheet in all_sheets:
+    temp = pd.read_excel(INPUT_FILE, sheet_name=sheet)
+    temp.insert(0, "日期", sheet)  # 日期放第一列
+    df_list.append(temp)
+
+df = pd.concat(df_list, ignore_index=True)
+
+# ====================== 删掉 均值、合计 行 ======================
+df_1 = df[~df["统计维度"].isin(["均值", "合计"])]
+
+# ====================== 删掉 4~7 列全为 0 或 NA 的行 ======================
+df_2 = df_1[~df_1.iloc[:, 3:7].isna().all(axis=1)]
+df_2 = df_2[~(df_2.iloc[:, 3:7] == 0).all(axis=1)]
+
+# ====================== 车型名称替换 ======================
+df_2.rename(columns={df_2.columns[2]: "car_type"}, inplace=True)
+df_3 = df_2.merge(reflect, left_on="car_type", right_on="old", how="left")
+df_3["car_type"] = df_3["new"].fillna(df_3["car_type"])
+df_3.drop(columns=["new", "old"], inplace=True)
+
+# ====================== 按 日期 + 车型 合并求和 ======================
+df_4 = df_3.groupby(["日期", "car_type"], as_index=False)[
+    ["线索总量", "去重后线索量", "当期有效量", "当期到店量"]
+].sum()
+
+# ====================== 日期格式化 + 排序 ======================
+df_4["日期"] = pd.to_datetime(df_4["日期"], errors="coerce")
+df_4 = df_4.sort_values("日期").reset_index(drop=True)
+
+# ====================== 调整列顺序：车型、日期、数据 ======================
+df_5 = df_4[["car_type", "日期", "线索总量", "去重后线索量", "当期有效量", "当期到店量"]]
+
+# ====================== 导出（带日期） ======================
+today = datetime.now().strftime("%Y-%m-%d")
+output_file = os.path.join(BASE_DIR, f"结果_{today}.xlsx")
+df_5.to_excel(output_file, index=False)
+
+print(f"✅ 处理完成！共 {len(df_5)} 行数据")
+print(f"📁 文件已保存到：{output_file}")
